@@ -1,0 +1,70 @@
+function formatCell(value) {
+  if (value === null || value === undefined || value === '') {
+    return <span className="cell-null">—</span>;
+  }
+
+  return String(value);
+}
+
+function getDisplayValue(row, column) {
+  if (column === 'CalculatedControlHours') {
+    return row.CalculatedControlHours ?? row.ControlHours;
+  }
+
+  return row[column];
+}
+
+export default function DataTable({ config, rows, onEdit, onDelete }) {
+  const getColumnLabel = (column) => config.columnLabels?.[column] || column;
+
+  if (!rows.length) {
+    return (
+      <div className="empty-state">
+        <div className="empty-state-icon">Нет данных</div>
+        <div>Добавьте первую запись или проверьте подключение к базе.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead>
+          <tr>
+            {config.columns.map((column) => (
+              <th key={column}>{getColumnLabel(column)}</th>
+            ))}
+            <th>Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row[config.key]}>
+              {config.columns.map((column) => (
+                <td key={column}>{formatCell(getDisplayValue(row, column))}</td>
+              ))}
+              <td>
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => onEdit(row[config.key])}
+                  >
+                    Изменить
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={() => onDelete(row[config.key])}
+                  >
+                    Удалить
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

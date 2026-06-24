@@ -1,0 +1,29 @@
+{
+  "name": "msu-practice-tables",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && node launch-electron.cjs .\"",
+    "start": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && node launch-electron.cjs .\"",
+    "electron": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && node launch-electron.cjs .\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "server": "node server.cjs",
+    "electron:prod": "npm run build && node launch-electron.cjs ."
+  },
+  "dependencies": {
+    "dotenv": "^17.2.1",
+    "express": "^4.19.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.5.2",
+    "concurrently": "^9.1.2",
+    "electron": "^36.3.1",
+    "vite": "^6.3.5",
+    "wait-on": "^8.0.3"
+  }
+}
