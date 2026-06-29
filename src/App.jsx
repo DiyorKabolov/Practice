@@ -4,7 +4,7 @@ import { fetchLookups, fetchRows, createRow, updateRow, deleteRow } from './api'
 import Header from './components/Hero';
 import Sidebar from './components/Sidebar';
 import DataTable from './components/DataTable';
-import EditForm from './components/EditForm';
+import FormModal from './components/FormModal';
 
 const INITIAL_TABLE = 'specialties';
 
@@ -26,6 +26,7 @@ export default function App() {
   const [status, setStatus] = useState({ text: 'Готово к работе', type: 'ok' });
   const [toasts, setToasts] = useState([]);
   const [confirmModal, setConfirmModal] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
 
   const config = TABLES[currentTable];
 
@@ -66,6 +67,7 @@ export default function App() {
     setEditingRow(null);
     setDraftRow(createEmptyRow(config.fields));
     setSearch('');
+    setFormOpen(false);
     loadRows(currentTable);
   }, [config.fields, currentTable, loadRows]);
 
@@ -99,6 +101,13 @@ export default function App() {
     setCurrentTable(tableName);
   };
 
+  const handleOpenAdd = () => {
+    setEditingId(null);
+    setEditingRow(null);
+    setDraftRow(createEmptyRow(config.fields));
+    setFormOpen(true);
+  };
+
   const handleStartEdit = (id) => {
     const row = rows.find((item) => String(item[config.key]) === String(id));
     if (!row) {
@@ -108,9 +117,11 @@ export default function App() {
 
     setEditingId(id);
     setEditingRow({ ...row });
+    setFormOpen(true);
   };
 
-  const handleCancelEdit = () => {
+  const handleCloseForm = () => {
+    setFormOpen(false);
     setEditingId(null);
     setEditingRow(null);
     setDraftRow(createEmptyRow(config.fields));
@@ -128,7 +139,7 @@ export default function App() {
 
       await loadRows(currentTable);
       await loadLookups();
-      handleCancelEdit();
+      handleCloseForm();
     } catch (error) {
       addToast(error.message, 'error');
       setStatus({ text: error.message, type: 'error' });
@@ -144,7 +155,7 @@ export default function App() {
         try {
           await deleteRow(currentTable, id);
           if (String(editingId) === String(id)) {
-            handleCancelEdit();
+            handleCloseForm();
           }
           addToast('Запись удалена');
           await loadRows(currentTable);
@@ -191,43 +202,44 @@ export default function App() {
               >
                 Обновить
               </button>
+              <button
+                className="btn btn-primary"
+                type="button"
+                onClick={handleOpenAdd}
+              >
+                + Добавить
+              </button>
             </div>
           </div>
 
-          <div className="content-grid">
-            <div className="panel">
-              <div className="panel-title">Данные</div>
-              <div className="status-bar">
-                <span
-                  className={`status-dot ${status.type === 'loading' ? 'loading' : ''} ${status.type === 'error' ? 'error' : ''}`}
-                />
-                <span>{status.text}</span>
-              </div>
-              <DataTable
-                config={config}
-                rows={filteredRows}
-                onEdit={handleStartEdit}
-                onDelete={handleDelete}
+          <div className="panel">
+            <div className="panel-title">Данные</div>
+            <div className="status-bar">
+              <span
+                className={`status-dot ${status.type === 'loading' ? 'loading' : ''} ${status.type === 'error' ? 'error' : ''}`}
               />
+              <span>{status.text}</span>
             </div>
-
-            <div className="panel">
-              <div className="panel-title">
-                {editingId ? `Редактирование ID ${editingId}` : 'Новая запись'}
-              </div>
-              <EditForm
-                config={config}
-                lookups={lookups}
-                editingId={editingId}
-                draftRow={draftRow}
-                onDraftChange={setDraftRow}
-                onSave={handleSave}
-                onCancel={handleCancelEdit}
-              />
-            </div>
+            <DataTable
+              config={config}
+              rows={filteredRows}
+              onEdit={handleStartEdit}
+              onDelete={handleDelete}
+            />
           </div>
         </section>
       </main>
+
+      <FormModal
+        open={formOpen}
+        config={config}
+        lookups={lookups}
+        editingId={editingId}
+        draftRow={draftRow}
+        onDraftChange={setDraftRow}
+        onSave={handleSave}
+        onClose={handleCloseForm}
+      />
 
       <div className="toast-container" aria-live="polite">
         {toasts.map((toast) => (

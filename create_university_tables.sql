@@ -110,6 +110,100 @@ BEGIN
 END
 GO
 
+IF OBJECT_ID('dbo.Weeks', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Weeks
+    (
+        WeekID INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Weeks PRIMARY KEY,
+        WeekName NVARCHAR(100) NOT NULL,
+        StartDate DATE NOT NULL,
+        EndDate DATE NOT NULL,
+        CONSTRAINT CK_Weeks_DateRange CHECK (StartDate <= EndDate)
+    );
+END
+GO
+
+IF OBJECT_ID('dbo.Attendance', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Attendance
+    (
+        AttendanceID INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Attendance PRIMARY KEY,
+        StudentID INT NOT NULL,
+        [Day] DATE NOT NULL,
+        PairNumber TINYINT NOT NULL,
+        Mark NVARCHAR(100) NOT NULL,
+        CONSTRAINT FK_Attendance_Students
+            FOREIGN KEY (StudentID) REFERENCES dbo.Students(StudentID)
+    );
+END
+GO
+
+IF OBJECT_ID('dbo.Performance', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Performance
+    (
+        PerformanceID INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Performance PRIMARY KEY,
+        StudentID INT NOT NULL,
+        SubjectID INT NOT NULL,
+        TeacherID INT NOT NULL,
+        ControlForm NVARCHAR(20) NOT NULL,
+        Tour TINYINT NULL,
+        MarkCode TINYINT NOT NULL,
+        CONSTRAINT CK_Performance_ControlForm CHECK (ControlForm IN (N'зачет', N'экзамен')),
+        CONSTRAINT CK_Performance_MarkCode CHECK (MarkCode BETWEEN 0 AND 5),
+        CONSTRAINT FK_Performance_Students
+            FOREIGN KEY (StudentID) REFERENCES dbo.Students(StudentID),
+        CONSTRAINT FK_Performance_Subjects
+            FOREIGN KEY (SubjectID) REFERENCES dbo.Subjects(SubjectID),
+        CONSTRAINT FK_Performance_Teachers
+            FOREIGN KEY (TeacherID) REFERENCES dbo.Teachers(TeacherID)
+    );
+END
+GO
+
+IF OBJECT_ID('dbo.Execution', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Execution
+    (
+        ExecutionID INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Execution PRIMARY KEY,
+        TeacherID INT NOT NULL,
+        SubjectID INT NOT NULL,
+        LectureHours INT NOT NULL CONSTRAINT DF_Execution_LectureHours DEFAULT(0),
+        PracticalHours INT NOT NULL CONSTRAINT DF_Execution_PracticalHours DEFAULT(0),
+        LaboratoryHours INT NOT NULL CONSTRAINT DF_Execution_LaboratoryHours DEFAULT(0),
+        OtherWorkHours INT NOT NULL CONSTRAINT DF_Execution_OtherWorkHours DEFAULT(0),
+        CONSTRAINT FK_Execution_Teachers
+            FOREIGN KEY (TeacherID) REFERENCES dbo.Teachers(TeacherID),
+        CONSTRAINT FK_Execution_Subjects
+            FOREIGN KEY (SubjectID) REFERENCES dbo.Subjects(SubjectID)
+    );
+END
+GO
+
+IF OBJECT_ID('dbo.Schedule', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.Schedule
+    (
+        ScheduleID INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Schedule PRIMARY KEY,
+        [Day] NVARCHAR(30) NOT NULL,
+        PairNumber TINYINT NOT NULL,
+        SubjectID INT NOT NULL,
+        TeacherID INT NOT NULL,
+        LessonType NVARCHAR(50) NOT NULL,
+        AuditoryID INT NOT NULL,
+        GroupID INT NOT NULL,
+        CONSTRAINT FK_Schedule_Subjects
+            FOREIGN KEY (SubjectID) REFERENCES dbo.Subjects(SubjectID),
+        CONSTRAINT FK_Schedule_Teachers
+            FOREIGN KEY (TeacherID) REFERENCES dbo.Teachers(TeacherID),
+        CONSTRAINT FK_Schedule_Auditories
+            FOREIGN KEY (AuditoryID) REFERENCES dbo.Auditories(AuditoryID),
+        CONSTRAINT FK_Schedule_Groups
+            FOREIGN KEY (GroupID) REFERENCES dbo.[Groups](GroupID)
+    );
+END
+GO
+
 CREATE OR ALTER VIEW dbo.v_DisciplineWithControlHours
 AS
 SELECT

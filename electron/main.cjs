@@ -7,6 +7,9 @@ let serverProcess = null;
 
 const DEV_URL = 'http://localhost:5173';
 const PROD_URL = 'http://127.0.0.1:3001';
+const userDataDir = path.join(__dirname, '..', '.electron-user-data');
+
+app.setPath('userData', userDataDir);
 
 function startServer() {
   return new Promise((resolve, reject) => {
@@ -56,7 +59,7 @@ function startServer() {
 }
 
 async function createWindow() {
-  const loadUrl = app.isPackaged ? PROD_URL : DEV_URL;
+  const loadUrl = app.isPackaged ? PROD_URL : `${DEV_URL}?v=${Date.now()}`;
 
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -73,11 +76,17 @@ async function createWindow() {
   });
 
   mainWindow.setMenu(null);
-  await mainWindow.loadURL(loadUrl);
+  const showWindow = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  };
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
-  });
+  mainWindow.once('ready-to-show', showWindow);
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.loadURL(loadUrl);
+  showWindow();
 
   mainWindow.on('closed', () => {
     mainWindow = null;

@@ -1,3 +1,42 @@
+const PERFORMANCE_MARK_OPTIONS = {
+  zachet: [
+    { value: 0, label: '0 - недоп' },
+    { value: 1, label: '1 - неявка' },
+    { value: 2, label: '2 - незачет' },
+    { value: 3, label: '3 - зачет' },
+  ],
+  exam: [
+    { value: 0, label: '0 - недоп' },
+    { value: 1, label: '1 - неявка' },
+    { value: 2, label: '2 - неуд' },
+    { value: 3, label: '3 - уд' },
+    { value: 4, label: '4 - хор' },
+    { value: 5, label: '5 - отл' },
+  ],
+};
+
+const DAY_OPTIONS = [
+  { value: 'Понедельник', label: 'Понедельник' },
+  { value: 'Вторник', label: 'Вторник' },
+  { value: 'Среда', label: 'Среда' },
+  { value: 'Четверг', label: 'Четверг' },
+  { value: 'Пятница', label: 'Пятница' },
+  { value: 'Суббота', label: 'Суббота' },
+];
+
+const LESSON_TYPE_OPTIONS = [
+  { value: 'Лекция', label: 'Лекция' },
+  { value: 'Практика', label: 'Практика' },
+  { value: 'Лабораторная', label: 'Лабораторная' },
+  { value: 'Семинар', label: 'Семинар' },
+  { value: 'Консультация', label: 'Консультация' },
+];
+
+function getPerformanceMarkOptions(draftRow) {
+  const form = String(draftRow?.ControlForm || '').toLowerCase();
+  return PERFORMANCE_MARK_OPTIONS[form] || [];
+}
+
 export const TABLES = {
   specialties: {
     title: 'Специальности',
@@ -163,6 +202,133 @@ export const TABLES = {
       OtherWorkHours: 'Прочее',
       ControlForm: 'Контроль',
       CalculatedControlHours: 'Контр. часы',
+    },
+  },
+  weeks: {
+    title: 'Недели',
+    hint: 'Календарные недели учебного процесса',
+    icon: 'WK',
+    key: 'WeekID',
+    fields: [
+      { name: 'WeekName', label: 'Название', type: 'text', required: true },
+      { name: 'StartDate', label: 'Дата начала', type: 'date', required: true },
+      { name: 'EndDate', label: 'Дата конца', type: 'date', required: true },
+    ],
+    columns: ['WeekID', 'WeekName', 'StartDate', 'EndDate'],
+    columnLabels: {
+      WeekID: 'ID',
+      WeekName: 'Название',
+      StartDate: 'Начало',
+      EndDate: 'Конец',
+    },
+  },
+  attendance: {
+    title: 'Посещаемость',
+    hint: 'Учет посещений студентов по датам и парам',
+    icon: 'AT',
+    key: 'AttendanceID',
+    fields: [
+      { name: 'StudentID', label: 'Студент', type: 'select', lookup: 'students', required: true },
+      { name: 'Day', label: 'День', type: 'date', required: true },
+      { name: 'PairNumber', label: 'Пара', type: 'number', required: true, min: 1, max: 12 },
+      { name: 'Mark', label: 'Отметка', type: 'text', required: true },
+    ],
+    columns: ['AttendanceID', 'StudentName', 'Day', 'PairNumber', 'Mark'],
+    columnLabels: {
+      AttendanceID: 'ID',
+      StudentName: 'Студент',
+      Day: 'День',
+      PairNumber: 'Пара',
+      Mark: 'Отметка',
+    },
+  },
+  performance: {
+    title: 'Успеваемость',
+    hint: 'Оценки по зачётам и экзаменам',
+    icon: 'PR',
+    key: 'PerformanceID',
+    fields: [
+      { name: 'StudentID', label: 'Студент', type: 'select', lookup: 'students', required: true },
+      { name: 'SubjectID', label: 'Дисциплина', type: 'select', lookup: 'subjects', required: true },
+      { name: 'TeacherID', label: 'Преподаватель', type: 'select', lookup: 'teachers', required: true },
+      {
+        name: 'ControlForm',
+        label: 'Форма контроля',
+        type: 'select',
+        required: true,
+        options: [
+          { value: 'зачет', label: 'Зачет' },
+          { value: 'экзамен', label: 'Экзамен' },
+        ],
+      },
+      { name: 'Tour', label: 'Тур', type: 'number', required: false, min: 1 },
+      {
+        name: 'MarkCode',
+        label: 'Отметка',
+        type: 'select',
+        required: true,
+        getOptions: getPerformanceMarkOptions,
+      },
+    ],
+    columns: ['PerformanceID', 'StudentName', 'DisciplineName', 'TeacherName', 'ControlForm', 'Tour', 'MarkDisplay'],
+    columnLabels: {
+      PerformanceID: 'ID',
+      StudentName: 'Студент',
+      DisciplineName: 'Дисциплина',
+      TeacherName: 'Преподаватель',
+      ControlForm: 'Форма',
+      Tour: 'Тур',
+      MarkDisplay: 'Отметка',
+    },
+  },
+  execution: {
+    title: 'Выполнение',
+    hint: 'Учет нагрузки преподавателя по дисциплинам',
+    icon: 'EX',
+    key: 'ExecutionID',
+    fields: [
+      { name: 'TeacherID', label: 'Преподаватель', type: 'select', lookup: 'teachers', required: true },
+      { name: 'SubjectID', label: 'Дисциплина', type: 'select', lookup: 'subjects', required: true },
+      { name: 'LectureHours', label: 'Лекции', type: 'number', required: true, min: 0 },
+      { name: 'PracticalHours', label: 'Практические', type: 'number', required: true, min: 0 },
+      { name: 'LaboratoryHours', label: 'Лабораторные', type: 'number', required: true, min: 0 },
+      { name: 'OtherWorkHours', label: 'Другие работы', type: 'number', required: true, min: 0 },
+    ],
+    columns: ['ExecutionID', 'TeacherName', 'DisciplineName', 'LectureHours', 'PracticalHours', 'LaboratoryHours', 'OtherWorkHours'],
+    columnLabels: {
+      ExecutionID: 'ID',
+      TeacherName: 'Преподаватель',
+      DisciplineName: 'Дисциплина',
+      LectureHours: 'Лекции',
+      PracticalHours: 'Практические',
+      LaboratoryHours: 'Лабораторные',
+      OtherWorkHours: 'Другие',
+    },
+  },
+  schedule: {
+    title: 'Расписание',
+    hint: 'Дни, пары, аудитории и группы',
+    icon: 'SC',
+    key: 'ScheduleID',
+    fields: [
+      { name: 'Day', label: 'День', type: 'select', required: true, options: DAY_OPTIONS },
+      { name: 'PairNumber', label: 'Пара', type: 'number', required: true, min: 1, max: 12 },
+      { name: 'SubjectID', label: 'Предмет', type: 'select', lookup: 'subjects', required: true },
+      { name: 'TeacherID', label: 'Преподаватель', type: 'select', lookup: 'teachers', required: true },
+      { name: 'LessonType', label: 'Тип занятия', type: 'select', required: true, options: LESSON_TYPE_OPTIONS },
+      { name: 'AuditoryID', label: 'Аудитория', type: 'select', lookup: 'auditories', required: true },
+      { name: 'GroupID', label: 'Группа', type: 'select', lookup: 'groups', required: true },
+    ],
+    columns: ['ScheduleID', 'Day', 'PairNumber', 'SubjectName', 'TeacherName', 'LessonType', 'RoomName', 'GroupName'],
+    columnLabels: {
+      ScheduleID: 'ID',
+      Day: 'День',
+      PairNumber: 'Пара',
+      SubjectName: 'Предмет',
+      TeacherName: 'Преподаватель',
+      LessonType: 'Тип',
+      RoomName: 'Аудитория',
+      GroupName: 'Группа',
     },
   },
 };

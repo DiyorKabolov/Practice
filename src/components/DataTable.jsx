@@ -20,7 +20,7 @@ export default function DataTable({ config, rows, onEdit, onDelete }) {
   if (!rows.length) {
     return (
       <div className="empty-state">
-        <div className="empty-state-icon">Нет данных</div>
+        <div className="empty-state-icon">📭 Нет данных</div>
         <div>Добавьте первую запись или проверьте подключение к базе.</div>
       </div>
     );
@@ -48,16 +48,18 @@ export default function DataTable({ config, rows, onEdit, onDelete }) {
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
+                    title="Редактировать запись"
                     onClick={() => onEdit(row[config.key])}
                   >
-                    Изменить
+                    ✏️ Изменить
                   </button>
                   <button
                     type="button"
                     className="btn btn-danger btn-sm"
+                    title="Удалить запись"
                     onClick={() => onDelete(row[config.key])}
                   >
-                    Удалить
+                    🗑 Удалить
                   </button>
                 </div>
               </td>

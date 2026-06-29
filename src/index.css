@@ -243,11 +243,7 @@ select {
   box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.14);
 }
 
-.content-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.75fr);
-  gap: 16px;
-}
+/* content-grid removed – form is now a modal */
 
 .status-bar {
   display: flex;
@@ -458,9 +454,79 @@ select {
   margin-top: 18px;
 }
 
+/* ─── Form Modal ──────────────────────────────── */
+@keyframes modalFadeIn {
+  from { opacity: 0; transform: translateY(-18px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)       scale(1);    }
+}
+
+.form-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 20px 20px;
+  background: rgba(16, 24, 40, 0.52);
+  overflow-y: auto;
+}
+
+.form-modal-box {
+  width: min(100%, 580px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(16, 24, 40, 0.18);
+  animation: modalFadeIn 0.2s ease;
+  flex-shrink: 0;
+}
+
+.form-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.form-modal-title {
+  font-size: 1rem;
+  font-weight: 900;
+  color: var(--text);
+  letter-spacing: 0;
+}
+
+.form-modal-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.form-modal-close:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.form-modal-body {
+  padding: 20px;
+}
+
 @media (max-width: 1180px) {
-  .layout,
-  .content-grid {
+  .layout {
     grid-template-columns: 1fr;
   }
 
