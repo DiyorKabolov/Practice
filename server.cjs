@@ -401,15 +401,7 @@ function decodeSqlcmdBuffer(raw) {
     return raw.toString('utf16le').replace(/^\uFEFF/, '');
   }
 
-  // sqlcmd v17 on Russian Windows outputs JSON string values in the system
-  // code page (CP866 / IBM866). Using utf-8 here causes all Cyrillic
-  // characters to appear as replacement characters (???).
-  // TextDecoder('ibm866') correctly maps these bytes to Unicode.
-  try {
-    return new TextDecoder('ibm866').decode(raw).replace(/^\uFEFF/, '');
-  } catch (_e) {
-    return raw.toString('utf8').replace(/^\uFEFF/, '');
-  }
+  return raw.toString('utf8').replace(/^\uFEFF/, '');
 }
 
 const CP1252_REVERSE = new Map([
@@ -567,7 +559,8 @@ async function execSqlcmd(query, database = SQL_DATABASE) {
     '-E',
     '-C',
     '-b',
-    '-u',
+    '-f',
+    '65001',
     '-y',
     '0',
     '-Q',
