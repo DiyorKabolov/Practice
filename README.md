@@ -14,7 +14,7 @@ Desktop application for managing university tables in MS SQL Server.
 
 - Node.js 18+
 - SQL Server
-- `sqlcmd` in `PATH` or a custom path in `SQLCMD_PATH`
+- Windows PowerShell 5.1+ for the database bootstrap scripts
 
 ## Quick Start
 
@@ -40,7 +40,7 @@ You can also launch `start_app.bat`.
 PORT=3001
 SQL_SERVER=localhost\SQLEXPRESS
 SQL_DATABASE=MSUPractice
-SQLCMD_PATH=sqlcmd
+POWERSHELL_PATH=powershell.exe
 ```
 
 If `SQL_SERVER` is not set, the app will try common options: `localhost\SQLEXPRESS`, `localhost`, `.\SQLEXPRESS`.
@@ -61,4 +61,5 @@ If `SQL_SERVER` is not set, the app will try common options: `localhost\SQLEXPRE
 - React 19 + Vite
 - Express
 - Electron
-- MS SQL Server + `sqlcmd`
+- MS SQL Server
+- Windows PowerShell for database setup

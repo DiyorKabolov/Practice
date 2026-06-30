@@ -1,15 +1,14 @@
 require('dotenv').config();
 
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
+const { spawn } = require('child_process');
 
 const app = express();
-const execFileAsync = promisify(execFile);
 
 const PORT = Number(process.env.PORT || 3001);
-const SQLCMD_PATH = process.env.SQLCMD_PATH || 'sqlcmd';
+const POWERSHELL_PATH = process.env.POWERSHELL_PATH || 'powershell.exe';
 const SQL_SERVER_CANDIDATES = Array.from(new Set([
   process.env.SQL_SERVER,
   'localhost\\SQLEXPRESS',
@@ -19,7 +18,77 @@ const SQL_SERVER_CANDIDATES = Array.from(new Set([
 const SQL_DATABASE = process.env.SQL_DATABASE || 'MSUPractice';
 const SCHEMA_FILE = path.join(__dirname, 'create_university_tables.sql');
 const SEED_FILE = path.join(__dirname, 'seed_msu_site.sql');
+const BOOTSTRAP_MARKER_TABLE = 'dbo.__AppBootstrap';
 let activeSqlServer = SQL_SERVER_CANDIDATES[0] || 'localhost\\SQLEXPRESS';
+const POWERSHELL_SQL_WORKER_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
+function Decode-Base64String([string]$value) {
+  return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($value))
+}
+
+function Encode-Base64String([string]$value) {
+  return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value))
+}
+
+while (($line = [Console]::In.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) {
+    continue
+  }
+
+  $request = $null
+  try {
+    $requestJson = Decode-Base64String $line
+    $request = $requestJson | ConvertFrom-Json
+
+    $connection = New-Object System.Data.SqlClient.SqlConnection $request.connectionString
+    try {
+      $connection.Open()
+      $command = $connection.CreateCommand()
+      try {
+        $command.CommandTimeout = 0
+        $command.CommandText = $request.query
+        if ($request.mode -eq 'scalar') {
+          $result = $command.ExecuteScalar()
+          $stdoutText = if ($null -ne $result -and $result -ne [DBNull]::Value) { [string]$result } else { '' }
+        } else {
+          $null = $command.ExecuteNonQuery()
+          $stdoutText = ''
+        }
+      } finally {
+        if ($command) {
+          $command.Dispose()
+        }
+      }
+    } finally {
+      $connection.Dispose()
+    }
+
+    $response = [pscustomobject]@{
+      id = $request.id
+      ok = $true
+      stdout = Encode-Base64String $stdoutText
+      stderr = ''
+    }
+  } catch {
+    $errorText = $_.Exception.Message
+    if ($null -ne $request) {
+      $response = [pscustomobject]@{
+        id = $request.id
+        ok = $false
+        stdout = ''
+        stderr = Encode-Base64String $errorText
+      }
+    } else {
+      continue
+    }
+  }
+
+  [Console]::Out.WriteLine(($response | ConvertTo-Json -Compress -Depth 5))
+}
+`;
 
 app.use(express.json());
 
@@ -378,18 +447,15 @@ const tableDefs = {
   },
 };
 
-function decodeSqlcmdBuffer(raw) {
+function decodeBufferText(raw) {
   if (!raw || raw.length === 0) {
     return '';
   }
 
-  // sqlcmd -u emits UTF-16LE with a BOM.
   if (raw.length >= 2 && raw[0] === 0xFF && raw[1] === 0xFE) {
     return raw.toString('utf16le').replace(/^\uFEFF/, '');
   }
 
-  // Some sqlcmd builds emit UTF-16LE without an explicit BOM.
-  // The JSON payload still contains lots of zero bytes in odd positions.
   let oddZeroBytes = 0;
   for (let i = 1; i < raw.length; i += 2) {
     if (raw[i] === 0x00) {
@@ -550,58 +616,156 @@ function buildDeleteQuery(def, id) {
   `;
 }
 
-async function execSqlcmd(query, database = SQL_DATABASE) {
-  const result = await execFileAsync(SQLCMD_PATH, [
-    '-S',
-    activeSqlServer,
-    '-d',
-    database,
-    '-E',
-    '-C',
-    '-b',
-    '-f',
-    '65001',
-    '-y',
-    '0',
-    '-Q',
-    query,
-  ], {
-    encoding: 'buffer',
-    maxBuffer: 10 * 1024 * 1024,
-  });
+function escapeSqlLiteral(value) {
+  return String(value).replace(/'/g, "''");
+}
 
-  const stdout = decodeSqlcmdBuffer(result.stdout);
-  if (!stdout) {
-    return null;
+function encodeBase64Text(value) {
+  return Buffer.from(String(value ?? ''), 'utf8').toString('base64');
+}
+
+function decodeBase64Text(value) {
+  return Buffer.from(String(value ?? ''), 'base64').toString('utf8');
+}
+
+function buildConnectionString(database) {
+  return [
+    `Server=${activeSqlServer}`,
+    `Database=${database}`,
+    'Integrated Security=True',
+    'TrustServerCertificate=True',
+    'Encrypt=False',
+  ].join(';') + ';';
+}
+
+class SqlWorker {
+  constructor() {
+    this.nextId = 1;
+    this.pending = new Map();
+    this.stdoutBuffer = '';
+    this.proc = spawn(POWERSHELL_PATH, [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      POWERSHELL_SQL_WORKER_SCRIPT,
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    this.ready = new Promise((resolve, reject) => {
+      this.proc.once('spawn', resolve);
+      this.proc.once('error', reject);
+    });
+
+    this.proc.stdout.on('data', (chunk) => {
+      this.stdoutBuffer += chunk.toString('utf8');
+      let newlineIndex;
+
+      while ((newlineIndex = this.stdoutBuffer.indexOf('\n')) !== -1) {
+        const line = this.stdoutBuffer.slice(0, newlineIndex).replace(/\r$/, '').trim();
+        this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+
+        if (!line) {
+          continue;
+        }
+
+        this.handleResponse(line);
+      }
+    });
+
+    this.proc.stderr.on('data', (chunk) => {
+      const message = chunk.toString('utf8').trim();
+      if (message) {
+        console.error('[sql-worker]', message);
+      }
+    });
+
+    this.proc.on('exit', (code, signal) => {
+      const error = new Error(`SQL worker exited${code !== null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}`);
+      for (const pending of this.pending.values()) {
+        pending.reject(error);
+      }
+      this.pending.clear();
+    });
   }
 
-  // sqlcmd breaks long FOR JSON output into chunks with newlines.
-  // We must strip ALL raw newlines (real newlines in data are escaped by SQL as \r\n).
-  const normalized = stdout.replace(/\r?\n/g, '').trim();
+  handleResponse(line) {
+    let response;
+    try {
+      response = JSON.parse(line);
+    } catch (error) {
+      for (const pending of this.pending.values()) {
+        pending.reject(error);
+      }
+      this.pending.clear();
+      return;
+    }
 
-  if (!normalized) {
-    return null;
+    const pending = this.pending.get(response.id);
+    if (!pending) {
+      return;
+    }
+
+    this.pending.delete(response.id);
+
+    if (response.ok) {
+      pending.resolve(Buffer.from(response.stdout || '', 'base64'));
+      return;
+    }
+
+    pending.reject(new Error(decodeBase64Text(response.stderr) || 'SQL worker request failed'));
   }
-  return normalized;
+
+  async request(query, database = SQL_DATABASE, mode = 'scalar') {
+    await this.ready;
+    const id = this.nextId++;
+    const payload = {
+      id,
+      connectionString: buildConnectionString(database),
+      query,
+      mode,
+    };
+
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      const ok = this.proc.stdin.write(`${encodeBase64Text(JSON.stringify(payload))}\n`);
+      if (!ok) {
+        this.proc.stdin.once('drain', () => {});
+      }
+    });
+  }
+}
+
+let sqlWorker = null;
+
+function getSqlWorker() {
+  if (!sqlWorker) {
+    sqlWorker = new SqlWorker();
+  }
+  return sqlWorker;
+}
+
+async function execSqlText(query, database = SQL_DATABASE, mode = 'scalar') {
+  return getSqlWorker().request(query, database, mode);
+}
+
+function splitSqlBatches(script) {
+  return String(script)
+    .replace(/^\uFEFF/, '')
+    .split(/^\s*GO\s*$/gim)
+    .map((batch) => batch.trim())
+    .filter(Boolean);
 }
 
 async function runSqlFile(file, database = SQL_DATABASE) {
-  await execFileAsync(SQLCMD_PATH, [
-    '-S',
-    activeSqlServer,
-    '-d',
-    database,
-    '-E',
-    '-C',
-    '-b',
-    '-f',
-    '65001',
-    '-i',
-    file,
-  ], {
-    encoding: 'buffer',
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  const script = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  for (const batch of splitSqlBatches(script)) {
+    await execSqlText(batch, database, 'nonquery');
+  }
 }
 
 function listenAsync(port) {
@@ -661,7 +825,7 @@ async function repairStoredStrings() {
       }
 
       if (needsUpdate) {
-        await execSqlcmd(buildUpdateQuery(def, row[def.id], repairedBody));
+        await execSqlText(buildUpdateQuery(def, row[def.id], repairedBody), SQL_DATABASE, 'nonquery');
         updatedRows += 1;
       }
     }
@@ -670,8 +834,38 @@ async function repairStoredStrings() {
   return updatedRows;
 }
 
+async function isBootstrapComplete() {
+  const text = decodeBufferText(await execSqlText(`
+    SET NOCOUNT ON;
+    SELECT CASE
+      WHEN OBJECT_ID(N'${escapeSqlLiteral(BOOTSTRAP_MARKER_TABLE)}', N'U') IS NULL THEN 0
+      ELSE 1
+    END AS IsBootstrapped;
+  `));
+
+  return text.trim() === '1';
+}
+
+async function markBootstrapComplete() {
+  await execSqlText(`
+    SET NOCOUNT ON;
+    IF OBJECT_ID(N'${escapeSqlLiteral(BOOTSTRAP_MARKER_TABLE)}', N'U') IS NULL
+    BEGIN
+      CREATE TABLE ${BOOTSTRAP_MARKER_TABLE} (
+        BootstrapID INT NOT NULL CONSTRAINT PK___AppBootstrap PRIMARY KEY,
+        AppliedAt DATETIME2 NOT NULL CONSTRAINT DF___AppBootstrap_AppliedAt DEFAULT SYSUTCDATETIME()
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM ${BOOTSTRAP_MARKER_TABLE} WHERE BootstrapID = 1)
+    BEGIN
+      INSERT INTO ${BOOTSTRAP_MARKER_TABLE} (BootstrapID) VALUES (1);
+    END;
+  `, SQL_DATABASE, 'nonquery');
+}
+
 async function queryJson(query) {
-  const text = await execSqlcmd(query);
+  const text = decodeBufferText(await execSqlText(query));
   if (!text) {
     return [];
   }
@@ -682,7 +876,7 @@ async function queryJson(query) {
 }
 
 async function queryJsonRaw(query) {
-  const text = await execSqlcmd(query);
+  const text = decodeBufferText(await execSqlText(query));
   if (!text) {
     return [];
   }
@@ -696,28 +890,15 @@ function getDef(name) {
 }
 
 async function canConnect(server) {
+  const previousServer = activeSqlServer;
+  activeSqlServer = server;
   try {
-    await execFileAsync(SQLCMD_PATH, [
-      '-S',
-      server,
-      '-d',
-      'master',
-      '-E',
-      '-C',
-      '-b',
-      '-h',
-      '-1',
-      '-W',
-      '-u',
-      '-Q',
-      'SELECT 1 AS ok;',
-    ], {
-      encoding: 'buffer',
-      maxBuffer: 1024 * 1024,
-    });
-    return true;
+    const text = decodeBufferText(await execSqlText('SELECT 1 AS ok;', 'master'));
+    return text.trim() === '1';
   } catch (_error) {
     return false;
+  } finally {
+    activeSqlServer = previousServer;
   }
 }
 
@@ -736,21 +917,26 @@ async function resolveSqlServer() {
 async function bootstrapDatabase() {
   await resolveSqlServer();
 
-  await execSqlcmd(`
+  await execSqlText(`
     IF DB_ID(N'${SQL_DATABASE.replace(/'/g, "''")}') IS NULL
     BEGIN
       CREATE DATABASE [${SQL_DATABASE.replace(/]/g, ']]')}];
     END
-  `, 'master');
+  `, 'master', 'nonquery');
+
+  if (await isBootstrapComplete()) {
+    return;
+  }
 
   await runSqlFile(SCHEMA_FILE, SQL_DATABASE);
   await runSqlFile(SEED_FILE, SQL_DATABASE);
   await repairStoredStrings();
+  await markBootstrapComplete();
 }
 
 app.get('/api/lookups', async (_req, res) => {
   try {
-    const [specialties, subjects, groups, teachers, auditories] = await Promise.all([
+    const [specialties, subjects, groups, teachers, auditories, students] = await Promise.all([
       queryJson(`
         SET NOCOUNT ON;
         SELECT
@@ -797,9 +983,19 @@ app.get('/api/lookups', async (_req, res) => {
         ORDER BY RoomNumber
         FOR JSON PATH, INCLUDE_NULL_VALUES;
       `),
+      queryJson(`
+        SET NOCOUNT ON;
+        SELECT
+          s.StudentID AS id,
+          CONCAT(s.LastName, N' ', s.FirstName, CASE WHEN s.MiddleName IS NULL OR s.MiddleName = N'' THEN N'' ELSE N' ' + s.MiddleName END, N' (', g.GroupName, N')') AS label
+        FROM dbo.Students s
+        INNER JOIN dbo.[Groups] g ON g.GroupID = s.GroupID
+        ORDER BY s.LastName, s.FirstName
+        FOR JSON PATH, INCLUDE_NULL_VALUES;
+      `),
     ]);
 
-    res.json({ specialties, subjects, groups, teachers, auditories });
+    res.json({ specialties, subjects, groups, teachers, auditories, students });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -826,7 +1022,7 @@ app.post('/api/:table', async (req, res) => {
   }
 
   try {
-    await execSqlcmd(buildInsertQuery(def, req.body || {}));
+    await execSqlText(buildInsertQuery(def, req.body || {}), SQL_DATABASE, 'nonquery');
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -840,7 +1036,7 @@ app.put('/api/:table/:id', async (req, res) => {
   }
 
   try {
-    await execSqlcmd(buildUpdateQuery(def, req.params.id, req.body || {}));
+    await execSqlText(buildUpdateQuery(def, req.params.id, req.body || {}), SQL_DATABASE, 'nonquery');
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -854,7 +1050,7 @@ app.delete('/api/:table/:id', async (req, res) => {
   }
 
   try {
-    await execSqlcmd(buildDeleteQuery(def, req.params.id));
+    await execSqlText(buildDeleteQuery(def, req.params.id), SQL_DATABASE, 'nonquery');
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -898,7 +1094,7 @@ async function start() {
     }
   } catch (error) {
     console.error('Failed to start application:');
-    const stderr = decodeSqlcmdBuffer(error.stderr).trim();
+    const stderr = decodeBufferText(error.stderr).trim();
     console.error(stderr || error.message);
     process.exit(1);
   }

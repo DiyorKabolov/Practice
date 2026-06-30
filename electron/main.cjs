@@ -8,6 +8,7 @@ let serverProcess = null;
 const DEV_URL = 'http://localhost:5173';
 const PROD_URL = 'http://127.0.0.1:3001';
 const userDataDir = path.join(__dirname, '..', '.electron-user-data');
+const SERVER_START_TIMEOUT_MS = 120000;
 
 app.setPath('userData', userDataDir);
 
@@ -28,8 +29,8 @@ function startServer() {
     };
 
     const timeout = setTimeout(() => {
-      finish(() => reject(new Error('API server did not start within 20 seconds. Check SQL Server and sqlcmd.')));
-    }, 20000);
+      finish(() => reject(new Error('API server did not start within 120 seconds. Check SQL Server and connection settings.')));
+    }, SERVER_START_TIMEOUT_MS);
 
     serverProcess.stdout.on('data', (data) => {
       const msg = data.toString();

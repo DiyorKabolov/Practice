@@ -1,17 +1,17 @@
 const PERFORMANCE_MARK_OPTIONS = {
   zachet: [
-    { value: 0, label: '0 - недоп' },
-    { value: 1, label: '1 - неявка' },
-    { value: 2, label: '2 - незачет' },
-    { value: 3, label: '3 - зачет' },
+    { value: 0, label: '0-недоп' },
+    { value: 1, label: '1-неявка' },
+    { value: 2, label: '2-незачёт' },
+    { value: 3, label: '3-зачёт' },
   ],
   exam: [
-    { value: 0, label: '0 - недоп' },
-    { value: 1, label: '1 - неявка' },
-    { value: 2, label: '2 - неуд' },
-    { value: 3, label: '3 - уд' },
-    { value: 4, label: '4 - хор' },
-    { value: 5, label: '5 - отл' },
+    { value: 0, label: '0-недоп' },
+    { value: 1, label: '1-неявка' },
+    { value: 2, label: '2-незачёт' },
+    { value: 3, label: '3-уд' },
+    { value: 4, label: '4-хор' },
+    { value: 5, label: '5-отл' },
   ],
 };
 
@@ -33,7 +33,10 @@ const LESSON_TYPE_OPTIONS = [
 ];
 
 function getPerformanceMarkOptions(draftRow) {
-  const form = String(draftRow?.ControlForm || '').toLowerCase();
+  const form = String(draftRow?.ControlForm || '')
+    .toLowerCase()
+    .replaceAll('ё', 'е')
+    .trim();
   return PERFORMANCE_MARK_OPTIONS[form] || [];
 }
 
@@ -261,7 +264,6 @@ export const TABLES = {
           { value: 'экзамен', label: 'Экзамен' },
         ],
       },
-      { name: 'Tour', label: 'Тур', type: 'number', required: false, min: 1 },
       {
         name: 'MarkCode',
         label: 'Отметка',
@@ -269,6 +271,7 @@ export const TABLES = {
         required: true,
         getOptions: getPerformanceMarkOptions,
       },
+      { name: 'Tour', label: 'Тур', type: 'number', required: false, min: 1 },
     ],
     columns: ['PerformanceID', 'StudentName', 'DisciplineName', 'TeacherName', 'ControlForm', 'Tour', 'MarkDisplay'],
     columnLabels: {

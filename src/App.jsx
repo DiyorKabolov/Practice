@@ -7,6 +7,7 @@ import DataTable from './components/DataTable';
 import FormModal from './components/FormModal';
 
 const INITIAL_TABLE = 'specialties';
+const THEME_STORAGE_KEY = 'msu-practice-theme';
 
 function createEmptyRow(fields) {
   return fields.reduce((acc, field) => {
@@ -19,6 +20,13 @@ export default function App() {
   const [currentTable, setCurrentTable] = useState(INITIAL_TABLE);
   const [rows, setRows] = useState([]);
   const [lookups, setLookups] = useState({});
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === 'undefined') {
+      return 'light';
+    }
+
+    return window.localStorage.getItem(THEME_STORAGE_KEY) || 'light';
+  });
   const [editingId, setEditingId] = useState(null);
   const [editingRow, setEditingRow] = useState(null);
   const [draftRow, setDraftRow] = useState(() => createEmptyRow(TABLES[INITIAL_TABLE].fields));
@@ -29,6 +37,12 @@ export default function App() {
   const [formOpen, setFormOpen] = useState(false);
 
   const config = TABLES[currentTable];
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.body.dataset.theme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   const addToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
@@ -101,6 +115,10 @@ export default function App() {
     setCurrentTable(tableName);
   };
 
+  const handleToggleTheme = () => {
+    setTheme((current) => (current === 'light' ? 'dark' : 'light'));
+  };
+
   const handleOpenAdd = () => {
     setEditingId(null);
     setEditingRow(null);
@@ -171,7 +189,12 @@ export default function App() {
 
   return (
     <div className="page-shell">
-      <Header rowsCount={rows.length} tablesCount={Object.keys(TABLES).length} />
+      <Header
+        rowsCount={rows.length}
+        tablesCount={Object.keys(TABLES).length}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+      />
 
       <main className="layout">
         <Sidebar
