@@ -8,7 +8,10 @@ async function request(url, options = {}) {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `HTTP ${response.status}`);
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.details = payload;
+    throw error;
   }
 
   return response.json();
@@ -36,8 +39,10 @@ export async function updateRow(tableName, id, data) {
   });
 }
 
-export async function deleteRow(tableName, id) {
-  return request(`/${tableName}/${id}`, {
+export async function deleteRow(tableName, id, options = {}) {
+  const cascade = options.cascade ? '?cascade=1' : '';
+
+  return request(`/${tableName}/${id}${cascade}`, {
     method: 'DELETE',
   });
 }

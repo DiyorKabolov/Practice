@@ -1,17 +1,17 @@
-const PERFORMANCE_MARK_OPTIONS = {
+﻿const PERFORMANCE_MARK_OPTIONS = {
   zachet: [
-    { value: 0, label: '0-недоп' },
-    { value: 1, label: '1-неявка' },
-    { value: 2, label: '2-незачёт' },
-    { value: 3, label: '3-зачёт' },
+    { value: 0, label: '0' },
+    { value: 1, label: '1' },
+    { value: 2, label: '2' },
+    { value: 3, label: '3' },
   ],
   exam: [
-    { value: 0, label: '0-недоп' },
-    { value: 1, label: '1-неявка' },
-    { value: 2, label: '2-незачёт' },
-    { value: 3, label: '3-уд' },
-    { value: 4, label: '4-хор' },
-    { value: 5, label: '5-отл' },
+    { value: 0, label: '0' },
+    { value: 1, label: '1' },
+    { value: 2, label: '2' },
+    { value: 3, label: '3' },
+    { value: 4, label: '4' },
+    { value: 5, label: '5' },
   ],
 };
 
@@ -37,7 +37,16 @@ function getPerformanceMarkOptions(draftRow) {
     .toLowerCase()
     .replaceAll('ё', 'е')
     .trim();
-  return PERFORMANCE_MARK_OPTIONS[form] || [];
+
+  if (form === 'зачет') {
+    return PERFORMANCE_MARK_OPTIONS.zachet;
+  }
+
+  if (form === 'экзамен') {
+    return PERFORMANCE_MARK_OPTIONS.exam;
+  }
+
+  return [];
 }
 
 export const TABLES = {

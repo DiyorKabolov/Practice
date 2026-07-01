@@ -18,6 +18,7 @@ const SQL_SERVER_CANDIDATES = Array.from(new Set([
 const SQL_DATABASE = process.env.SQL_DATABASE || 'MSUPractice';
 const SCHEMA_FILE = path.join(__dirname, 'create_university_tables.sql');
 const SEED_FILE = path.join(__dirname, 'seed_msu_site.sql');
+const EXTRA_SEED_FILE = path.join(__dirname, 'seed_demo_extra.sql');
 const BOOTSTRAP_MARKER_TABLE = 'dbo.__AppBootstrap';
 let activeSqlServer = SQL_SERVER_CANDIDATES[0] || 'localhost\\SQLEXPRESS';
 const POWERSHELL_SQL_WORKER_SCRIPT = `
@@ -350,27 +351,7 @@ const tableDefs = {
         p.ControlForm,
         p.Tour,
         p.MarkCode,
-        CASE
-          WHEN LOWER(LTRIM(RTRIM(p.ControlForm))) = N'зачет' THEN
-            CASE p.MarkCode
-              WHEN 0 THEN N'0 - недоп'
-              WHEN 1 THEN N'1 - неявка'
-              WHEN 2 THEN N'2 - незачет'
-              WHEN 3 THEN N'3 - зачет'
-              ELSE CONCAT(CAST(p.MarkCode AS NVARCHAR(10)), N' - ?')
-            END
-          WHEN LOWER(LTRIM(RTRIM(p.ControlForm))) = N'экзамен' THEN
-            CASE p.MarkCode
-              WHEN 0 THEN N'0 - недоп'
-              WHEN 1 THEN N'1 - неявка'
-              WHEN 2 THEN N'2 - неуд'
-              WHEN 3 THEN N'3 - уд'
-              WHEN 4 THEN N'4 - хор'
-              WHEN 5 THEN N'5 - отл'
-              ELSE CONCAT(CAST(p.MarkCode AS NVARCHAR(10)), N' - ?')
-            END
-          ELSE CAST(p.MarkCode AS NVARCHAR(10))
-        END AS MarkDisplay
+        CAST(p.MarkCode AS NVARCHAR(10)) AS MarkDisplay
       FROM dbo.Performance p
       INNER JOIN dbo.Students st ON st.StudentID = p.StudentID
       INNER JOIN dbo.Subjects s ON s.SubjectID = p.SubjectID
@@ -889,6 +870,94 @@ function getDef(name) {
   return tableDefs[String(name || '').toLowerCase()];
 }
 
+const DELETE_DEPENDENCIES = {
+  auditories: [
+    { dependency: 'расписании', tableKey: 'schedule', column: 'AuditoryID' },
+  ],
+  groups: [
+    { dependency: 'студентах', tableKey: 'students', column: 'GroupID' },
+    { dependency: 'учебной нагрузке', tableKey: 'discipline', column: 'GroupID' },
+    { dependency: 'расписании', tableKey: 'schedule', column: 'GroupID' },
+  ],
+  students: [
+    { dependency: 'посещаемости', tableKey: 'attendance', column: 'StudentID' },
+    { dependency: 'успеваемости', tableKey: 'performance', column: 'StudentID' },
+  ],
+  subjects: [
+    { dependency: 'учебной нагрузке', tableKey: 'discipline', column: 'SubjectID' },
+    { dependency: 'выполнении', tableKey: 'execution', column: 'SubjectID' },
+    { dependency: 'расписании', tableKey: 'schedule', column: 'SubjectID' },
+    { dependency: 'успеваемости', tableKey: 'performance', column: 'SubjectID' },
+  ],
+  teachers: [
+    { dependency: 'учебной нагрузке', tableKey: 'discipline', column: 'TeacherID' },
+    { dependency: 'выполнении', tableKey: 'execution', column: 'TeacherID' },
+    { dependency: 'расписании', tableKey: 'schedule', column: 'TeacherID' },
+    { dependency: 'успеваемости', tableKey: 'performance', column: 'TeacherID' },
+  ],
+  specialties: [
+    { dependency: 'группах', tableKey: 'groups', column: 'SpecialtyID' },
+  ],
+  weeks: [],
+};
+
+async function collectDeleteDependencies(tableName, id) {
+  const dependencies = DELETE_DEPENDENCIES[String(tableName || '').toLowerCase()] || [];
+  if (!dependencies.length) {
+    return [];
+  }
+
+  const query = `
+    SET NOCOUNT ON;
+    SELECT
+      dependency,
+      tableName,
+      [count]
+    FROM (
+      ${dependencies.map((dependency) => `
+        SELECT
+          N'${escapeSqlLiteral(dependency.dependency)}' AS dependency,
+          N'${escapeSqlLiteral(tableDefs[dependency.tableKey].table)}' AS tableName,
+          COUNT(1) AS [count]
+        FROM ${tableDefs[dependency.tableKey].table}
+        WHERE [${dependency.column}] = ${sqlQuote(id, 'int')}
+      `).join('\nUNION ALL\n')}
+    ) AS dep_counts
+    FOR JSON PATH, INCLUDE_NULL_VALUES;
+  `;
+
+  const rows = await queryJson(query);
+  return rows.filter((row) => Number(row.count || 0) > 0);
+}
+
+async function cascadeDelete(tableName, id, seen = new Set()) {
+  const key = `${String(tableName).toLowerCase()}:${String(id)}`;
+  if (seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+
+  const dependencies = DELETE_DEPENDENCIES[String(tableName || '').toLowerCase()] || [];
+  for (const dependency of dependencies) {
+    const childDef = tableDefs[dependency.tableKey];
+    const childRows = await queryJson(`
+      SET NOCOUNT ON;
+      SELECT [${childDef.id}] AS id
+      FROM ${childDef.table}
+      WHERE [${dependency.column}] = ${sqlQuote(id, 'int')}
+      FOR JSON PATH, INCLUDE_NULL_VALUES;
+    `);
+
+    for (const childRow of childRows) {
+      await cascadeDelete(dependency.tableKey, childRow.id, seen);
+    }
+  }
+
+  const def = getDef(tableName);
+  await execSqlText(buildDeleteQuery(def, id), SQL_DATABASE, 'nonquery');
+}
+
 async function canConnect(server) {
   const previousServer = activeSqlServer;
   activeSqlServer = server;
@@ -924,14 +993,18 @@ async function bootstrapDatabase() {
     END
   `, 'master', 'nonquery');
 
-  if (await isBootstrapComplete()) {
-    return;
+  const bootstrapped = await isBootstrapComplete();
+
+  if (!bootstrapped) {
+    await runSqlFile(SCHEMA_FILE, SQL_DATABASE);
+    await runSqlFile(SEED_FILE, SQL_DATABASE);
+    await repairStoredStrings();
+    await markBootstrapComplete();
+  } else {
+    await runSqlFile(SEED_FILE, SQL_DATABASE);
   }
 
-  await runSqlFile(SCHEMA_FILE, SQL_DATABASE);
-  await runSqlFile(SEED_FILE, SQL_DATABASE);
-  await repairStoredStrings();
-  await markBootstrapComplete();
+  await runSqlFile(EXTRA_SEED_FILE, SQL_DATABASE);
 }
 
 app.get('/api/lookups', async (_req, res) => {
@@ -1050,10 +1123,32 @@ app.delete('/api/:table/:id', async (req, res) => {
   }
 
   try {
-    await execSqlText(buildDeleteQuery(def, req.params.id), SQL_DATABASE, 'nonquery');
+    const cascade = ['1', 'true'].includes(String(req.query.cascade || '').toLowerCase());
+
+    if (cascade) {
+      await cascadeDelete(req.params.table, req.params.id);
+    } else {
+      const dependencies = await collectDeleteDependencies(req.params.table, req.params.id);
+      if (dependencies.length) {
+        return res.status(409).json({
+          error: 'Нельзя удалить запись: есть связанные записи.',
+          dependencies,
+        });
+      }
+
+      await execSqlText(buildDeleteQuery(def, req.params.id), SQL_DATABASE, 'nonquery');
+    }
+
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    const message = String(error.message || '');
+    const isDependencyError =
+      message.startsWith('Нельзя удалить запись:') ||
+      /REFERENCE|конфликт/i.test(message);
+
+    res.status(isDependencyError ? 409 : 500).json({
+      error: isDependencyError ? 'Нельзя удалить запись: есть связанные записи.' : message,
+    });
   }
 });
 

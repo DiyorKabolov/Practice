@@ -14,8 +14,15 @@ function getDisplayValue(row, column) {
   return row[column];
 }
 
-export default function DataTable({ config, rows, onEdit, onDelete }) {
+export default function DataTable({ config, rows, onEdit, onDelete, onSort, sortConfig }) {
   const getColumnLabel = (column) => config.columnLabels?.[column] || column;
+  const getSortIndicator = (column) => {
+    if (sortConfig?.column !== column) {
+      return '';
+    }
+
+    return sortConfig.direction === 'asc' ? ' ▲' : ' ▼';
+  };
 
   if (!rows.length) {
     return (
@@ -32,7 +39,16 @@ export default function DataTable({ config, rows, onEdit, onDelete }) {
         <thead>
           <tr>
             {config.columns.map((column) => (
-              <th key={column}>{getColumnLabel(column)}</th>
+              <th key={column}>
+                <button
+                  type="button"
+                  className="table-head-btn"
+                  onClick={() => onSort?.(column)}
+                >
+                  <span>{getColumnLabel(column)}</span>
+                  <span className="table-head-sort">{getSortIndicator(column)}</span>
+                </button>
+              </th>
             ))}
             <th>Действия</th>
           </tr>

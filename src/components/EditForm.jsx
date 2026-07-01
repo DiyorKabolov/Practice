@@ -163,7 +163,7 @@ function SearchableSelect({ field, value, options, onChange }) {
 }
 
 function SelectField({ field, value, options, onChange }) {
-  const searchable = Boolean(field.lookup) || field.searchable;
+  const searchable = true;
 
   if (searchable) {
     return <SearchableSelect field={field} value={value} options={options} onChange={onChange} />;
@@ -225,6 +225,25 @@ export default function EditForm({
 
     return lookups[field.lookup] || [];
   };
+
+  useEffect(() => {
+    const markField = config.fields.find((field) => field.name === 'MarkCode');
+    if (!markField) {
+      return;
+    }
+
+    const options = getSelectOptions(markField).map(normalizeOption);
+    if (!options.length) {
+      return;
+    }
+
+    const currentValue = String(draftRow.MarkCode ?? '');
+    const isValid = options.some((option) => String(option.value) === currentValue);
+
+    if (!isValid && currentValue !== '') {
+      onDraftChange((prev) => ({ ...prev, MarkCode: '' }));
+    }
+  }, [config.fields, draftRow.ControlForm, draftRow.MarkCode, lookups, onDraftChange]);
 
   const normalizeOption = (option) => {
     if (option && typeof option === 'object' && 'value' in option && 'label' in option) {
