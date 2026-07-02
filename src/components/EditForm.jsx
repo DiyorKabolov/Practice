@@ -7,7 +7,7 @@ function normalizeText(value) {
     .trim();
 }
 
-function SearchableSelect({ field, value, options, onChange }) {
+function SearchableSelect({ field, value, options, onChange, error }) {
   const rootRef = useRef(null);
   const inputRef = useRef(null);
   const [query, setQuery] = useState('');
@@ -52,18 +52,23 @@ function SearchableSelect({ field, value, options, onChange }) {
           normalized,
           score: term
             ? (exact ? 0 : startsWith ? 1 : includes ? 2 : 3)
-            : 0,
+          : 0,
         };
       })
-      .filter((option) => !term || option.score < 3)
+      .filter((option) => !term || option.score < 3);
+
+    if (!term) {
+      return scored.slice(0, 7);
+    }
+
+    return scored
       .sort((a, b) => {
         if (a.score !== b.score) {
           return a.score - b.score;
         }
         return a.label.localeCompare(b.label, 'ru');
-      });
-
-    return scored.slice(0, 7);
+      })
+      .slice(0, 7);
   }, [options, query]);
 
   const commitValue = (option) => {
@@ -89,15 +94,15 @@ function SearchableSelect({ field, value, options, onChange }) {
   const showValue = open ? query : selectedOption?.label || query;
 
   return (
-    <div className="field field-combo" ref={rootRef}>
+    <div className={`field field-combo ${error ? 'field-has-error' : ''}`} ref={rootRef}>
       <label className="field-label" htmlFor={`field-${field.name}`}>
-        {field.label}
+        {field.label}{field.required && <span className="field-required">*</span>}
       </label>
       <div className="combo-shell">
         <input
           ref={inputRef}
           id={`field-${field.name}`}
-          className="combo-input"
+          className={`combo-input ${error ? 'input-error' : ''}`}
           type="text"
           value={showValue}
           placeholder="Начните вводить..."
@@ -136,6 +141,7 @@ function SearchableSelect({ field, value, options, onChange }) {
         aria-hidden="true"
         readOnly
       />
+      {error && <div className="field-error">{error}</div>}
       {open && (
         <div className="combo-menu" role="listbox" aria-label={field.label}>
           {filteredOptions.length ? (
@@ -162,34 +168,8 @@ function SearchableSelect({ field, value, options, onChange }) {
   );
 }
 
-function SelectField({ field, value, options, onChange }) {
-  const searchable = true;
-
-  if (searchable) {
-    return <SearchableSelect field={field} value={value} options={options} onChange={onChange} />;
-  }
-
-  return (
-    <div className="field">
-      <label className="field-label" htmlFor={`field-${field.name}`}>
-        {field.label}
-      </label>
-      <select
-        id={`field-${field.name}`}
-        className="field-select"
-        value={value}
-        required={Boolean(field.required)}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        <option value="">Выберите значение</option>
-        {options.map((option) => (
-          <option key={String(option.value)} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
+function SelectField({ field, value, options, onChange, error }) {
+  return <SearchableSelect field={field} value={value} options={options} onChange={onChange} error={error} />;
 }
 
 export default function EditForm({
@@ -201,12 +181,57 @@ export default function EditForm({
   onSave,
   onCancel,
 }) {
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [touched, setTouched] = useState({});
+
   const setFieldValue = (fieldName, value) => {
     onDraftChange((prev) => ({ ...prev, [fieldName]: value }));
+    // Validate on change if already touched
+    setTouched((prev) => ({ ...prev, [fieldName]: true }));
+    const field = config.fields.find((f) => f.name === fieldName);
+    if (field?.validate) {
+      const err = field.validate(value, { ...draftRow, [fieldName]: value });
+      setFieldErrors((prev) => ({ ...prev, [fieldName]: err || null }));
+    } else {
+      setFieldErrors((prev) => ({ ...prev, [fieldName]: null }));
+    }
+  };
+
+  const validateAll = () => {
+    const errors = {};
+    let hasErrors = false;
+
+    for (const field of config.fields) {
+      const value = draftRow[field.name] ?? '';
+
+      // Required check for non-select fields
+      if (field.required && field.type !== 'select' && (!value || String(value).trim() === '')) {
+        errors[field.name] = 'Поле обязательно для заполнения';
+        hasErrors = true;
+        continue;
+      }
+
+      if (field.validate) {
+        const err = field.validate(value, draftRow);
+        if (err) {
+          errors[field.name] = err;
+          hasErrors = true;
+        }
+      }
+    }
+
+    setFieldErrors(errors);
+    setTouched(Object.fromEntries(config.fields.map((f) => [f.name, true])));
+    return !hasErrors;
   };
 
   const handleSubmit = (event) => {
     event.preventDefault();
+
+    const valid = validateAll();
+    if (!valid) return;
+
+    // Also check native browser validity (for required selects etc.)
     if (!event.currentTarget.checkValidity()) {
       event.currentTarget.reportValidity();
       return;
@@ -245,6 +270,31 @@ export default function EditForm({
     }
   }, [config.fields, draftRow.ControlForm, draftRow.MarkCode, lookups, onDraftChange]);
 
+  useEffect(() => {
+    const markField = config.fields.find((field) => field.name === 'Mark');
+    if (!markField || markField.type !== 'select') {
+      return;
+    }
+
+    const options = getSelectOptions(markField).map(normalizeOption);
+    if (!options.length) {
+      return;
+    }
+
+    const currentValue = String(draftRow.Mark ?? '');
+    const isValid = options.some((option) => String(option.value) === currentValue);
+
+    if (!isValid && currentValue !== '') {
+      onDraftChange((prev) => ({ ...prev, Mark: '' }));
+    }
+  }, [config.fields, draftRow.Mark, lookups, onDraftChange]);
+
+  // Clear errors when switching records
+  useEffect(() => {
+    setFieldErrors({});
+    setTouched({});
+  }, [editingId]);
+
   const normalizeOption = (option) => {
     if (option && typeof option === 'object' && 'value' in option && 'label' in option) {
       return option;
@@ -258,9 +308,10 @@ export default function EditForm({
   };
 
   return (
-    <form className="edit-form" onSubmit={handleSubmit}>
+    <form className="edit-form" onSubmit={handleSubmit} noValidate>
       {config.fields.map((field) => {
         const value = draftRow[field.name] ?? '';
+        const error = fieldErrors[field.name] || null;
 
         if (field.type === 'select') {
           const options = getSelectOptions(field).map(normalizeOption);
@@ -271,18 +322,19 @@ export default function EditForm({
               value={value}
               options={options}
               onChange={(nextValue) => setFieldValue(field.name, nextValue)}
+              error={error}
             />
           );
         }
 
         return (
-          <div className="field" key={field.name}>
+          <div className={`field ${error ? 'field-has-error' : ''}`} key={field.name}>
             <label className="field-label" htmlFor={`field-${field.name}`}>
-              {field.label}
+              {field.label}{field.required && <span className="field-required">*</span>}
             </label>
             <input
               id={`field-${field.name}`}
-              className="field-input"
+              className={`field-input ${error ? 'input-error' : ''}`}
               type={field.type}
               value={value}
               required={Boolean(field.required)}
@@ -290,7 +342,15 @@ export default function EditForm({
               max={field.max}
               step={field.step}
               onChange={(event) => setFieldValue(field.name, event.target.value)}
+              onBlur={() => {
+                setTouched((prev) => ({ ...prev, [field.name]: true }));
+                if (field.validate) {
+                  const err = field.validate(value, draftRow);
+                  setFieldErrors((prev) => ({ ...prev, [field.name]: err || null }));
+                }
+              }}
             />
+            {error && <div className="field-error">{error}</div>}
           </div>
         );
       })}

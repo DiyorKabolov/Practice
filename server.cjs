@@ -52,8 +52,45 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
         $command.CommandTimeout = 0
         $command.CommandText = $request.query
         if ($request.mode -eq 'scalar') {
-          $result = $command.ExecuteScalar()
-          $stdoutText = if ($null -ne $result -and $result -ne [DBNull]::Value) { [string]$result } else { '' }
+          $reader = $command.ExecuteReader()
+          try {
+            if ($reader.Read()) {
+              $result = $reader.GetValue(0)
+              $stdoutText = if ($null -ne $result -and $result -ne [DBNull]::Value) { [string]$result } else { '' }
+            } else {
+              $stdoutText = ''
+            }
+          } finally {
+            if ($reader) {
+              $reader.Dispose()
+            }
+          }
+        } elseif ($request.mode -eq 'rows') {
+          $reader = $command.ExecuteReader()
+          try {
+            $rows = New-Object System.Collections.Generic.List[object]
+            while ($reader.Read()) {
+              $row = [ordered]@{}
+              for ($i = 0; $i -lt $reader.FieldCount; $i++) {
+                $name = $reader.GetName($i)
+                $value = $reader.GetValue($i)
+                if ($null -eq $value -or $value -eq [DBNull]::Value) {
+                  $row[$name] = $null
+                } elseif ($value -is [datetime]) {
+                  $row[$name] = $value.ToString('yyyy-MM-dd HH:mm:ss')
+                } else {
+                  $row[$name] = $value
+                }
+              }
+              $rows.Add([pscustomobject]$row) | Out-Null
+            }
+
+            $stdoutText = ($rows | ConvertTo-Json -Compress -Depth 20)
+          } finally {
+            if ($reader) {
+              $reader.Dispose()
+            }
+          }
         } else {
           $null = $command.ExecuteNonQuery()
           $stdoutText = ''
@@ -87,7 +124,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     }
   }
 
-  [Console]::Out.WriteLine(($response | ConvertTo-Json -Compress -Depth 5))
+  [Console]::Out.WriteLine(($response | ConvertTo-Json -Compress -Depth 20))
 }
 `;
 
@@ -278,9 +315,8 @@ const tableDefs = {
       INNER JOIN dbo.Subjects s ON s.SubjectID = d.SubjectID
       INNER JOIN dbo.Teachers t ON t.TeacherID = d.TeacherID
       INNER JOIN dbo.[Groups] g ON g.GroupID = d.GroupID
-      LEFT JOIN dbo.v_DisciplineWithControlHours v ON v.DisciplineID = d.DisciplineID
-      ORDER BY d.DisciplineID
-      FOR JSON PATH, INCLUDE_NULL_VALUES;
+        LEFT JOIN dbo.v_DisciplineWithControlHours v ON v.DisciplineID = d.DisciplineID
+        ORDER BY d.DisciplineID
     `,
   },
   weeks: {
@@ -299,6 +335,10 @@ const tableDefs = {
         CONVERT(varchar(10), StartDate, 23) AS StartDate,
         CONVERT(varchar(10), EndDate, 23) AS EndDate
       FROM dbo.Weeks
+      WHERE WeekName IS NOT NULL
+        AND LTRIM(RTRIM(WeekName)) <> ''
+        AND StartDate IS NOT NULL
+        AND EndDate IS NOT NULL
       ORDER BY WeekID
       FOR JSON PATH, INCLUDE_NULL_VALUES;
     `,
@@ -394,6 +434,7 @@ const tableDefs = {
     table: 'dbo.Schedule',
     id: 'ScheduleID',
     fields: [
+      { name: 'WeekID', type: 'int' },
       { name: 'Day', type: 'string' },
       { name: 'PairNumber', type: 'int' },
       { name: 'SubjectID', type: 'int' },
@@ -406,24 +447,18 @@ const tableDefs = {
       SET NOCOUNT ON;
       SELECT
         sc.ScheduleID,
+        sc.WeekID,
+        w.WeekName,
         sc.[Day],
         sc.PairNumber,
         sc.SubjectID,
-        s.SubjectName,
         sc.TeacherID,
-        CONCAT(t.LastName, N' ', t.FirstName, CASE WHEN t.MiddleName IS NULL OR t.MiddleName = N'' THEN N'' ELSE N' ' + t.MiddleName END) AS TeacherName,
         sc.LessonType,
         sc.AuditoryID,
-        a.RoomNumber AS RoomName,
-        sc.GroupID,
-        g.GroupName
+        sc.GroupID
       FROM dbo.Schedule sc
-      INNER JOIN dbo.Subjects s ON s.SubjectID = sc.SubjectID
-      INNER JOIN dbo.Teachers t ON t.TeacherID = sc.TeacherID
-      INNER JOIN dbo.Auditories a ON a.AuditoryID = sc.AuditoryID
-      INNER JOIN dbo.[Groups] g ON g.GroupID = sc.GroupID
+      LEFT JOIN dbo.Weeks w ON w.WeekID = sc.WeekID
       ORDER BY sc.ScheduleID
-      FOR JSON PATH, INCLUDE_NULL_VALUES;
     `,
   },
 };
@@ -749,6 +784,37 @@ async function runSqlFile(file, database = SQL_DATABASE) {
   }
 }
 
+async function ensureScheduleWeekColumn() {
+  await execSqlText(`
+    SET NOCOUNT ON;
+    IF COL_LENGTH(N'dbo.Schedule', N'WeekID') IS NULL
+    BEGIN
+      ALTER TABLE dbo.Schedule
+      ADD WeekID INT NULL;
+    END;
+
+    IF OBJECT_ID(N'dbo.FK_Schedule_Weeks', N'F') IS NULL
+       AND COL_LENGTH(N'dbo.Schedule', N'WeekID') IS NOT NULL
+       AND OBJECT_ID(N'dbo.Weeks', N'U') IS NOT NULL
+    BEGIN
+      ALTER TABLE dbo.Schedule
+      ADD CONSTRAINT FK_Schedule_Weeks
+        FOREIGN KEY (WeekID) REFERENCES dbo.Weeks(WeekID);
+    END;
+  `, SQL_DATABASE, 'nonquery');
+}
+
+async function cleanupWeeksTable() {
+  await execSqlText(`
+    SET NOCOUNT ON;
+    DELETE FROM dbo.Weeks
+    WHERE WeekName IS NULL
+      OR LTRIM(RTRIM(WeekName)) = ''
+      OR StartDate IS NULL
+      OR EndDate IS NULL;
+  `, SQL_DATABASE, 'nonquery');
+}
+
 function listenAsync(port) {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, () => resolve(server));
@@ -858,6 +924,16 @@ async function queryJson(query) {
 
 async function queryJsonRaw(query) {
   const text = decodeBufferText(await execSqlText(query));
+  if (!text) {
+    return [];
+  }
+
+  const parsed = JSON.parse(text);
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+async function queryRows(query, database = SQL_DATABASE) {
+  const text = decodeBufferText(await execSqlText(query, database, 'rows'));
   if (!text) {
     return [];
   }
@@ -1004,12 +1080,14 @@ async function bootstrapDatabase() {
     await runSqlFile(SEED_FILE, SQL_DATABASE);
   }
 
+  await ensureScheduleWeekColumn();
+  await cleanupWeeksTable();
   await runSqlFile(EXTRA_SEED_FILE, SQL_DATABASE);
 }
 
 app.get('/api/lookups', async (_req, res) => {
   try {
-    const [specialties, subjects, groups, teachers, auditories, students] = await Promise.all([
+    const [specialties, subjects, groups, teachers, auditories, students, weeks] = await Promise.all([
       queryJson(`
         SET NOCOUNT ON;
         SELECT
@@ -1066,9 +1144,18 @@ app.get('/api/lookups', async (_req, res) => {
         ORDER BY s.LastName, s.FirstName
         FOR JSON PATH, INCLUDE_NULL_VALUES;
       `),
+      queryJson(`
+        SET NOCOUNT ON;
+        SELECT
+          WeekID AS id,
+          CONCAT(WeekName, N' (', CONVERT(varchar(10), StartDate, 23), N' - ', CONVERT(varchar(10), EndDate, 23), N')') AS label
+        FROM dbo.Weeks
+        ORDER BY StartDate DESC, WeekID DESC
+        FOR JSON PATH, INCLUDE_NULL_VALUES;
+      `),
     ]);
 
-    res.json({ specialties, subjects, groups, teachers, auditories, students });
+    res.json({ specialties, subjects, groups, teachers, auditories, students, weeks });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1081,12 +1168,95 @@ app.get('/api/:table', async (req, res) => {
   }
 
   try {
-    const rows = await queryJson(def.listQuery);
+    const rows = ['schedule', 'discipline'].includes(req.params.table)
+      ? await queryRows(def.listQuery)
+      : await queryJson(def.listQuery);
     res.json(rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ─── Schedule conflict checker ──────────────────────────────────────────────
+async function checkScheduleConflicts(body, excludeId = null) {
+  const weekId = body.WeekID ? Number(body.WeekID) : null;
+  const day = body.Day ? String(body.Day).trim() : '';
+  const pair = body.PairNumber ? Number(body.PairNumber) : null;
+  const teacherId = body.TeacherID ? Number(body.TeacherID) : null;
+  const auditoryId = body.AuditoryID ? Number(body.AuditoryID) : null;
+  const groupId = body.GroupID ? Number(body.GroupID) : null;
+
+  if (!weekId || !day || !pair || !teacherId || !auditoryId || !groupId) return null;
+
+  const excludeClause = excludeId ? `AND sc.ScheduleID <> ${sqlQuote(excludeId, 'int')}` : '';
+
+  const query = `
+    SET NOCOUNT ON;
+    SELECT
+      teacher_conflict.conflict AS teacher_conflict,
+      teacher_conflict.groupName AS teacher_conflict_group,
+      auditory_conflict.conflict AS auditory_conflict,
+      auditory_conflict.groupName AS auditory_conflict_group,
+      group_conflict.conflict AS group_conflict,
+      group_conflict.subjectName AS group_conflict_subject
+    FROM (
+      SELECT
+        CASE WHEN COUNT(1) > 0 THEN 1 ELSE 0 END AS conflict,
+        MAX(g.GroupName) AS groupName
+      FROM dbo.Schedule sc
+      INNER JOIN dbo.[Groups] g ON g.GroupID = sc.GroupID
+      WHERE sc.WeekID = ${weekId}
+        AND sc.[Day] = N'${escapeSqlLiteral(day)}'
+        AND sc.PairNumber = ${pair}
+        AND sc.TeacherID = ${teacherId}
+        ${excludeClause}
+    ) teacher_conflict,
+    (
+      SELECT
+        CASE WHEN COUNT(1) > 0 THEN 1 ELSE 0 END AS conflict,
+        MAX(g.GroupName) AS groupName
+      FROM dbo.Schedule sc
+      INNER JOIN dbo.[Groups] g ON g.GroupID = sc.GroupID
+      WHERE sc.WeekID = ${weekId}
+        AND sc.[Day] = N'${escapeSqlLiteral(day)}'
+        AND sc.PairNumber = ${pair}
+        AND sc.AuditoryID = ${auditoryId}
+        ${excludeClause}
+    ) auditory_conflict,
+    (
+      SELECT
+        CASE WHEN COUNT(1) > 0 THEN 1 ELSE 0 END AS conflict,
+        MAX(s.SubjectName) AS subjectName
+      FROM dbo.Schedule sc
+      INNER JOIN dbo.Subjects s ON s.SubjectID = sc.SubjectID
+      WHERE sc.WeekID = ${weekId}
+        AND sc.[Day] = N'${escapeSqlLiteral(day)}'
+        AND sc.PairNumber = ${pair}
+        AND sc.GroupID = ${groupId}
+        ${excludeClause}
+    ) group_conflict
+    FOR JSON PATH, INCLUDE_NULL_VALUES;
+  `;
+
+  try {
+    const rows = await queryJson(query);
+    if (!rows.length) return null;
+    const row = rows[0];
+
+    if (row.teacher_conflict === 1) {
+      return `Преподаватель уже занят на ${day}, пара ${pair}${row.teacher_conflict_group ? ` (группа ${row.teacher_conflict_group})` : ''}`;
+    }
+    if (row.auditory_conflict === 1) {
+      return `Аудитория уже занята на ${day}, пара ${pair}${row.auditory_conflict_group ? ` (группа ${row.auditory_conflict_group})` : ''}`;
+    }
+    if (row.group_conflict === 1) {
+      return `У группы уже есть занятие на ${day}, пара ${pair}${row.group_conflict_subject ? ` (${row.group_conflict_subject})` : ''}`;
+    }
+  } catch (e) {
+    console.error('Schedule conflict check failed:', e);
+  }
+  return null;
+}
 
 app.post('/api/:table', async (req, res) => {
   const def = getDef(req.params.table);
@@ -1095,6 +1265,14 @@ app.post('/api/:table', async (req, res) => {
   }
 
   try {
+    // Check schedule conflicts
+    if (req.params.table === 'schedule') {
+      const conflict = await checkScheduleConflicts(req.body || {});
+      if (conflict) {
+        return res.status(409).json({ error: conflict });
+      }
+    }
+
     await execSqlText(buildInsertQuery(def, req.body || {}), SQL_DATABASE, 'nonquery');
     res.json({ ok: true });
   } catch (error) {
@@ -1109,6 +1287,14 @@ app.put('/api/:table/:id', async (req, res) => {
   }
 
   try {
+    // Check schedule conflicts (exclude current record)
+    if (req.params.table === 'schedule') {
+      const conflict = await checkScheduleConflicts(req.body || {}, req.params.id);
+      if (conflict) {
+        return res.status(409).json({ error: conflict });
+      }
+    }
+
     await execSqlText(buildUpdateQuery(def, req.params.id, req.body || {}), SQL_DATABASE, 'nonquery');
     res.json({ ok: true });
   } catch (error) {

@@ -185,6 +185,7 @@ BEGIN
     CREATE TABLE dbo.Schedule
     (
         ScheduleID INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Schedule PRIMARY KEY,
+        WeekID INT NULL,
         [Day] NVARCHAR(30) NOT NULL,
         PairNumber TINYINT NOT NULL,
         SubjectID INT NOT NULL,
@@ -194,6 +195,8 @@ BEGIN
         GroupID INT NOT NULL,
         CONSTRAINT FK_Schedule_Subjects
             FOREIGN KEY (SubjectID) REFERENCES dbo.Subjects(SubjectID),
+        CONSTRAINT FK_Schedule_Weeks
+            FOREIGN KEY (WeekID) REFERENCES dbo.Weeks(WeekID),
         CONSTRAINT FK_Schedule_Teachers
             FOREIGN KEY (TeacherID) REFERENCES dbo.Teachers(TeacherID),
         CONSTRAINT FK_Schedule_Auditories
@@ -201,6 +204,21 @@ BEGIN
         CONSTRAINT FK_Schedule_Groups
             FOREIGN KEY (GroupID) REFERENCES dbo.[Groups](GroupID)
     );
+END
+GO
+
+IF COL_LENGTH('dbo.Schedule', 'WeekID') IS NULL
+BEGIN
+    ALTER TABLE dbo.Schedule
+    ADD WeekID INT NULL;
+END
+GO
+
+IF OBJECT_ID('dbo.FK_Schedule_Weeks', 'F') IS NULL AND COL_LENGTH('dbo.Schedule', 'WeekID') IS NOT NULL
+BEGIN
+    ALTER TABLE dbo.Schedule
+    ADD CONSTRAINT FK_Schedule_Weeks
+        FOREIGN KEY (WeekID) REFERENCES dbo.Weeks(WeekID);
 END
 GO
 

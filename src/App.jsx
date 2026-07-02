@@ -5,6 +5,7 @@ import Header from './components/Hero';
 import Sidebar from './components/Sidebar';
 import DataTable from './components/DataTable';
 import FormModal from './components/FormModal';
+import ScheduleGrid from './components/ScheduleGrid';
 
 const INITIAL_TABLE = 'specialties';
 const THEME_STORAGE_KEY = 'msu-practice-theme';
@@ -76,6 +77,88 @@ function buildCsv(columns, rows, getValue) {
   return `\ufeff${lines.join('\r\n')}`;
 }
 
+function getDefaultFilterValues(config) {
+  return (config.filters || []).reduce((acc, filter) => {
+    acc[filter.field] = '';
+    return acc;
+  }, {});
+}
+
+function getFilterOptions(filter, lookups) {
+  if (Array.isArray(filter.options)) {
+    return filter.options;
+  }
+
+  if (filter.lookup) {
+    return lookups[filter.lookup] || [];
+  }
+
+  return [];
+}
+
+function normalizeFilterOption(option) {
+  if (option === null || option === undefined) {
+    return null;
+  }
+
+  if (typeof option === 'string' || typeof option === 'number') {
+    const value = String(option);
+    return { value, label: value };
+  }
+
+  const value = option.id ?? option.value ?? option.code ?? option.name ?? option.title ?? '';
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+
+  return {
+    value: String(value),
+    label: String(option.label ?? option.name ?? option.title ?? value),
+  };
+}
+
+function getDerivedFilterOptions(rows, field) {
+  const seen = new Set();
+  const options = [];
+
+  for (const row of rows) {
+    const rawValue = row?.[field];
+    if (rawValue === null || rawValue === undefined || rawValue === '') {
+      continue;
+    }
+
+    const value = String(rawValue);
+    if (seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    options.push({ value, label: value });
+  }
+
+  return options.sort((left, right) => left.label.localeCompare(right.label, 'ru', { numeric: true }));
+}
+
+function getSelectFilterOptions(filter, lookups, rows) {
+  const options = getFilterOptions(filter, lookups).map(normalizeFilterOption).filter(Boolean);
+  if (options.length > 0) {
+    return options;
+  }
+
+  return getDerivedFilterOptions(rows, filter.field);
+}
+
+function matchesFilterValue(rowValue, filterValue, filter) {
+  if (filterValue === null || filterValue === undefined || filterValue === '') {
+    return true;
+  }
+
+  const value = String(rowValue ?? '');
+  const needle = String(filterValue ?? '');
+
+  return value === needle;
+}
+
 export default function App() {
   const [currentTable, setCurrentTable] = useState(INITIAL_TABLE);
   const [rows, setRows] = useState([]);
@@ -91,6 +174,7 @@ export default function App() {
   const [editingRow, setEditingRow] = useState(null);
   const [draftRow, setDraftRow] = useState(() => createEmptyRow(TABLES[INITIAL_TABLE].fields));
   const [search, setSearch] = useState('');
+  const [tableFilters, setTableFilters] = useState({});
   const [status, setStatus] = useState({ text: 'Готово к работе', type: 'ok' });
   const [toasts, setToasts] = useState([]);
   const [confirmModal, setConfirmModal] = useState(null);
@@ -152,6 +236,19 @@ export default function App() {
   }, [config.fields, currentTable, loadRows]);
 
   useEffect(() => {
+    setTableFilters((current) => {
+      if (current[currentTable]) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [currentTable]: getDefaultFilterValues(config),
+      };
+    });
+  }, [config, currentTable]);
+
+  useEffect(() => {
     if (!editingRow) {
       setDraftRow(createEmptyRow(config.fields));
       return;
@@ -166,16 +263,18 @@ export default function App() {
 
   const filteredRows = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) {
-      return rows;
-    }
+    const activeFilters = tableFilters[currentTable] || getDefaultFilterValues(config);
+    const filterDefs = config.filters || [];
 
-    return rows.filter((row) =>
-      Object.values(row).some((value) =>
-        String(value ?? '').toLowerCase().includes(term)
-      )
-    );
-  }, [rows, search]);
+    return rows.filter((row) => {
+      const matchesSearch = !term || Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(term));
+      if (!matchesSearch) {
+        return false;
+      }
+
+      return filterDefs.every((filter) => matchesFilterValue(row[filter.field], activeFilters[filter.field], filter));
+    });
+  }, [config, currentTable, rows, search, tableFilters]);
 
   const sortedRows = useMemo(
     () => sortRows(filteredRows, sortConfig, config.key),
@@ -209,6 +308,23 @@ export default function App() {
       return { column, direction: 'asc' };
     });
     setCurrentPage(1);
+  };
+
+  const handleFilterChange = (field, value) => {
+    setTableFilters((current) => ({
+      ...current,
+      [currentTable]: {
+        ...(current[currentTable] || getDefaultFilterValues(config)),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleClearFilters = () => {
+    setTableFilters((current) => ({
+      ...current,
+      [currentTable]: getDefaultFilterValues(config),
+    }));
   };
 
   const handleExportCsv = () => {
@@ -389,6 +505,46 @@ export default function App() {
             </div>
           </div>
 
+          {currentTable !== 'schedule' && (config.filters || []).length > 0 && (
+            <div className="table-filters">
+              {(config.filters || []).map((filter) => {
+                const activeValue = (tableFilters[currentTable] || getDefaultFilterValues(config))[filter.field] || '';
+                const options = getSelectFilterOptions(filter, lookups, rows);
+
+                return (
+                  <label key={filter.field} className="table-filter">
+                    <span className="table-filter-label">{filter.label}</span>
+                    {filter.type === 'select' ? (
+                      <select
+                        className="table-filter-control"
+                        value={activeValue}
+                        onChange={(event) => handleFilterChange(filter.field, event.target.value)}
+                      >
+                        <option value="">Все</option>
+                        {options.map((option) => (
+                          <option key={String(option.id ?? option.value)} value={String(option.id ?? option.value)}>
+                            {option.label ?? option.name ?? String(option.value ?? option.id)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className="table-filter-control"
+                        type={filter.type || 'text'}
+                        value={activeValue}
+                        placeholder={filter.placeholder || 'Все'}
+                        onChange={(event) => handleFilterChange(filter.field, event.target.value)}
+                      />
+                    )}
+                  </label>
+                );
+              })}
+              <button type="button" className="btn btn-secondary btn-sm" onClick={handleClearFilters}>
+                Сбросить фильтры
+              </button>
+            </div>
+          )}
+
           <div className="panel">
             <div className="panel-title">Данные</div>
             <div className="status-bar">
@@ -397,53 +553,64 @@ export default function App() {
               />
               <span>{status.text}</span>
             </div>
-            <DataTable
-              config={config}
-              rows={pagedRows}
-              onEdit={handleStartEdit}
-              onDelete={handleDelete}
-              onSort={handleSort}
-              sortConfig={sortConfig}
-            />
+            {currentTable === 'schedule' ? (
+              <ScheduleGrid
+                rows={sortedRows}
+                lookups={lookups}
+                onEdit={handleStartEdit}
+                onDelete={handleDelete}
+              />
+            ) : (
+              <DataTable
+                config={config}
+                rows={pagedRows}
+                onEdit={handleStartEdit}
+                onDelete={handleDelete}
+                onSort={handleSort}
+                sortConfig={sortConfig}
+              />
+            )}
 
-            <div className="table-footer">
-              <div className="table-footer-info">
-                <span>{sortedRows.length} записей</span>
-                <span>Страница {currentPage} из {totalPages}</span>
-              </div>
-              <div className="table-footer-actions">
-                <label className="page-size-control">
-                  <span>Показывать</span>
-                  <select
-                    value={pageSize}
-                    onChange={(event) => {
-                      setPageSize(Number(event.target.value));
-                      setCurrentPage(1);
-                    }}
+            {currentTable !== 'schedule' && (
+              <div className="table-footer">
+                <div className="table-footer-info">
+                  <span>{sortedRows.length} записей</span>
+                  <span>Страница {currentPage} из {totalPages}</span>
+                </div>
+                <div className="table-footer-actions">
+                  <label className="page-size-control">
+                    <span>Показывать</span>
+                    <select
+                      value={pageSize}
+                      onChange={(event) => {
+                        setPageSize(Number(event.target.value));
+                        setCurrentPage(1);
+                      }}
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                    </select>
+                  </label>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    type="button"
+                    onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
+                    disabled={currentPage <= 1}
                   >
-                    <option value={10}>10</option>
-                    <option value={20}>20</option>
-                    <option value={50}>50</option>
-                  </select>
-                </label>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  type="button"
-                  onClick={() => setCurrentPage((current) => Math.max(1, current - 1))}
-                  disabled={currentPage <= 1}
-                >
-                  Назад
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  type="button"
-                  onClick={() => setCurrentPage((current) => Math.min(totalPages, current + 1))}
-                  disabled={currentPage >= totalPages}
-                >
-                  Вперёд
-                </button>
+                    Назад
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    type="button"
+                    onClick={() => setCurrentPage((current) => Math.min(totalPages, current + 1))}
+                    disabled={currentPage >= totalPages}
+                  >
+                    Вперёд
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </section>
       </main>
@@ -458,6 +625,7 @@ export default function App() {
         onSave={handleSave}
         onClose={handleCloseForm}
       />
+
 
       <div className="toast-container" aria-live="polite">
         {toasts.map((toast) => (
